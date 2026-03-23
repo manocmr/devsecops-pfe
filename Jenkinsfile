@@ -73,4 +73,7 @@ pipeline {
             echo 'SUCCES - Image Docker conforme et securisee !'
         }
     }
+    tools {
+    jdk 'JDK-21'
+    }
 }
