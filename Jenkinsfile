@@ -4,6 +4,7 @@ pipeline {
     environment {
         IMAGE_NAME = "devsecops-pipeline-test"
         IMAGE_TAG  = "latest"
+        JAVA_HOME  = "C:\\Program Files\\Microsoft\\jdk-21.0.10.7-hotspot"
     }
 
     stages {
