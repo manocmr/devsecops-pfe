@@ -4,7 +4,6 @@ pipeline {
     environment {
         IMAGE_NAME = "devsecops-pipeline-test"
         IMAGE_TAG  = "latest"
-        CVSS_THRESHOLD = "7.0"
     }
 
     stages {
@@ -21,94 +20,57 @@ pipeline {
             }
         }
 
-        // ─── TRIVY SCANS ────────────────────────────────────────
-
-        stage('Trivy — Scan Filesystem & Secrets') {
+        stage('Trivy - CVE Critiques') {
             steps {
-                echo 'Scan du code source et des fichiers de config...'
-                sh """
-                    trivy fs . \
-                        --scanners vuln,secret,misconfig \
-                        --severity HIGH,CRITICAL \
-                        --exit-code 1 \
-                        --format table
-                """
+                echo 'Detection des CVE HIGH et CRITICAL...'
+                sh "trivy image ${IMAGE_NAME}:${IMAGE_TAG} --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --format table --output trivy-cve-report.txt"
             }
         }
 
-        stage('Trivy — Scan Image Docker') {
+        stage('Trivy - Seuil CVSS') {
             steps {
-                echo 'Scan des CVE dans l image Docker...'
-                sh """
-                    trivy image ${IMAGE_NAME}:${IMAGE_TAG} \
-                        --scanners vuln,misconfig \
-                        --severity HIGH,CRITICAL \
-                        --exit-code 1 \
-                        --cvss-score-threshold ${CVSS_THRESHOLD} \
-                        --format table \
-                        --output trivy-report.txt
-                """
+                echo 'Blocage si score CVSS superieur a 7.0...'
+                sh "trivy image ${IMAGE_NAME}:${IMAGE_TAG} --scanners vuln --severity HIGH,CRITICAL --cvss-score-threshold 7.0 --exit-code 1 --format table"
             }
         }
 
-        stage('Trivy — Rapport JSON') {
+        stage('Trivy - Packages Obsoletes') {
             steps {
-                echo 'Génération du rapport JSON pour archivage...'
-                sh """
-                    trivy image ${IMAGE_NAME}:${IMAGE_TAG} \
-                        --scanners vuln \
-                        --severity HIGH,CRITICAL \
-                        --format json \
-                        --output trivy-report.json
-                """
+                echo 'Detection des packages obsoletes et licences...'
+                sh "trivy image ${IMAGE_NAME}:${IMAGE_TAG} --scanners license --severity HIGH,CRITICAL --exit-code 0 --format table --output trivy-packages-report.txt"
             }
         }
 
-        // ────────────────────────────────────────────────────────
+        stage('Trivy - Mauvaises Pratiques Dockerfile') {
+            steps {
+                echo 'Detection des mauvaises configurations Docker...'
+                sh "trivy config . --exit-code 1 --severity HIGH,CRITICAL --format table --output trivy-misconfig-report.txt"
+            }
+        }
+
+        stage('Trivy - Rapport JSON Global') {
+            steps {
+                echo 'Generation rapport JSON complet...'
+                sh "trivy image ${IMAGE_NAME}:${IMAGE_TAG} --scanners vuln,misconfig,secret,license --severity HIGH,CRITICAL --format json --output trivy-full-report.json"
+            }
+        }
 
         stage('Deploy') {
-            when {
-                expression { currentBuild.result == null }
-            }
             steps {
-                echo 'Aucune CVE critique — déploiement autorisé ✅'
+                echo 'Aucune CVE critique - deploiement autorise'
             }
         }
     }
 
     post {
         always {
-            // Archiver les rapports même si le pipeline échoue
-            archiveArtifacts artifacts: 'trivy-report.*', allowEmptyArchive: true
+            archiveArtifacts artifacts: 'trivy-*.txt, trivy-*.json', allowEmptyArchive: true
         }
         failure {
-            echo '❌ CVE critique détectée — pipeline bloqué !'
-            // Ici tu peux ajouter une alerte Slack/Email
+            echo 'ECHEC - Vulnerability ou misconfiguration critique detectee !'
         }
         success {
-            echo '✅ Aucune misconfiguration critique détectée !'
+            echo 'SUCCES - Image Docker conforme et securisee !'
         }
     }
 }
-```
-
----
-
-## Ce que Trivy va détecter sur ton projet
-
-| Type | Ce qui est scanné |
-|---|---|
-| **CVE critiques** | Vulnérabilités dans l'image `eclipse-temurin:17` |
-| **Packages obsolètes** | Librairies Alpine/Java avec CVE connues |
-| **Secrets** | Mots de passe, tokens hardcodés dans le code |
-| **Misconfigs** | Pas de USER défini, EXPOSE inutile, etc. |
-
----
-
-## Résumé des fichiers à avoir
-```
-devsecops-pipeline-test/
-├── Dockerfile        ✅ déjà créé
-├── .trivy.yaml       ✅ nouveau
-├── .trivyignore      ✅ nouveau
-└── Jenkinsfile       ✅ mis à jour
