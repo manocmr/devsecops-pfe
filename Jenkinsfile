@@ -24,30 +24,30 @@ pipeline {
             }
         }
 
-        stage('Trivy - CVE Critiques') {
+        stage('Trivy - Rapport CVE HIGH/CRITICAL') {
             steps {
                 echo 'Detection des CVE HIGH et CRITICAL...'
                 bat "trivy image %IMAGE_NAME%:%IMAGE_TAG% --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --format table --output trivy-cve-report.txt"
             }
         }
 
-        stage('Trivy - Seuil CVSS') {
+        stage('Trivy - Rapport CVE CRITICAL') {
             steps {
-                echo 'Detection CVE CRITICAL - seuil CVSS...'
-                bat "trivy image %IMAGE_NAME%:%IMAGE_TAG% --scanners vuln --severity CRITICAL --exit-code 0 --format table"
+                echo 'Detection des CVE CRITICAL...'
+                bat "trivy image %IMAGE_NAME%:%IMAGE_TAG% --scanners vuln --severity CRITICAL --exit-code 0 --format table --output trivy-critical-report.txt"
             }
         }
 
-        stage('Trivy - Packages Obsoletes') {
+        stage('Trivy - Rapport Licences') {
             steps {
-                echo 'Detection des packages obsoletes et licences...'
-                bat "trivy image %IMAGE_NAME%:%IMAGE_TAG% --scanners license --exit-code 0 --format table --output trivy-packages-report.txt"
+                echo 'Detection des licences...'
+                bat "trivy image %IMAGE_NAME%:%IMAGE_TAG% --scanners license --exit-code 0 --format table --output trivy-license-report.txt"
             }
         }
 
-        stage('Trivy - Mauvaises Pratiques Dockerfile') {
+        stage('Trivy - Mauvaises Configurations') {
             steps {
-                echo 'Detection des mauvaises configurations Docker...'
+                echo 'Detection des mauvaises configurations...'
                 bat "trivy config . --exit-code 0 --severity HIGH,CRITICAL --format table --output trivy-misconfig-report.txt"
             }
         }
