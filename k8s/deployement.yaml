@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vulnerable-app
+  namespace: security-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vulnerable-app
+  template:
+    metadata:
+      labels:
+        app: vulnerable-app
+    spec:
+      containers:
+        - name: vulnerable-app
+          image: nginx:latest
+          ports:
+            - containerPort: 80
+          env:
+            - name: DB_PASSWORD
+              value: "supersecret"
+            - name: API_KEY
+              value: "123456789"
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            allowPrivilegeEscalation: true
