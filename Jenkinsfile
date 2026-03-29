@@ -32,7 +32,7 @@ pipeline {
                 echo 'Scan Terraform avec Checkov...'
                 bat 'checkov -d terraform --framework terraform'
                 echo 'Scan Kubernetes YAML avec Checkov...'
-                bat 'checkov -d k8s --framework kubernetes'
+                bat 'checkov -d kubernetes --framework kubernetes'
             }
         }
 
@@ -47,7 +47,7 @@ pipeline {
             steps {
                 echo 'Scan IaC avec Terrascan...'
                 bat 'terrascan scan -i terraform -d terraform'
-                bat 'terrascan scan -i k8s -d k8s'
+                bat 'terrascan scan -i k8s -d kubernetes'
             }
         }
 
@@ -55,14 +55,14 @@ pipeline {
             steps {
                 echo 'Scan Terraform & K8s avec Trivy...'
                 bat 'trivy config terraform --severity HIGH,CRITICAL --exit-code 1'
-                bat 'trivy config k8s --severity HIGH,CRITICAL --exit-code 1'
+                bat 'trivy config kubernetes --severity HIGH,CRITICAL --exit-code 1'
             }
         }
 
         stage('Validate Kubernetes YAML') {
             steps {
                 echo 'Validation des manifests Kubernetes...'
-                bat 'kubectl apply --dry-run=client -f k8s'
+                bat 'kubectl apply --dry-run=client -f kubernetes'
             }
         }
 
