@@ -7,7 +7,7 @@ resource "aws_security_group" "secure_sg" {
   description = "Security group securise"
 
   ingress {
-    description = "HTTPS depuis un réseau interne"
+    description = "HTTPS depuis un reseau interne"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
