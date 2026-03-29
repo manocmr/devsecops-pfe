@@ -2,31 +2,23 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_security_group" "insecure_sg" {
-  name        = "insecure-sg"
-  description = "Security group volontairement insecure pour demo IaC"
+resource "aws_security_group" "secure_sg" {
+  name        = "secure-sg"
+  description = "Security group securise"
 
   ingress {
-    description = "SSH ouvert au monde"
-    from_port   = 22
-    to_port     = 22
+    description = "HTTPS depuis un réseau interne"
+    from_port   = 443
+    to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "HTTP ouvert au monde"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["10.0.0.0/8"]
   }
 
   egress {
-    description = "Tout le trafic sortant autorise"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    description = "Trafic sortant specifique"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
@@ -34,29 +26,54 @@ resource "aws_security_group" "insecure_sg" {
 resource "aws_instance" "web" {
   ami                    = "ami-0c02fb55956c7d316"
   instance_type          = "t2.micro"
-  vpc_security_group_ids = [aws_security_group.insecure_sg.id]
+  vpc_security_group_ids = [aws_security_group.secure_sg.id]
+  associate_public_ip_address = false
 
-  associate_public_ip_address = true
+  metadata_options {
+    http_endpoint = "enabled"
+    http_tokens   = "required"
+  }
+
+  ebs_optimized = true
 
   tags = {
-    Name = "demo-insecure-instance"
+    Name = "secure-instance"
   }
 }
 
-resource "aws_s3_bucket" "insecure_bucket" {
-  bucket = "demo-iac-insecure-bucket-123456789"
+resource "aws_kms_key" "mykey" {
+  description             = "This key is used to encrypt bucket objects"
+  deletion_window_in_days = 7
+  enable_key_rotation     = true
 }
 
-resource "aws_s3_bucket_public_access_block" "insecure_bucket_access" {
-  bucket = aws_s3_bucket.insecure_bucket.id
-
-  block_public_acls       = false
-  block_public_policy     = false
-  ignore_public_acls      = false
-  restrict_public_buckets = false
+resource "aws_s3_bucket" "secure_bucket" {
+  bucket = "demo-iac-secure-bucket-123456789"
 }
 
-resource "aws_s3_bucket_acl" "insecure_acl" {
-  bucket = aws_s3_bucket.insecure_bucket.id
-  acl    = "public-read"
+resource "aws_s3_bucket_server_side_encryption_configuration" "secure_bucket_sse" {
+  bucket = aws_s3_bucket.secure_bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      kms_master_key_id = aws_kms_key.mykey.arn
+      sse_algorithm     = "aws:kms"
+    }
+  }
+}
+
+resource "aws_s3_bucket_versioning" "secure_bucket_versioning" {
+  bucket = aws_s3_bucket.secure_bucket.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "secure_bucket_access" {
+  bucket = aws_s3_bucket.secure_bucket.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }

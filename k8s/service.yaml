@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: vulnerable-service
+  name: secure-service
   namespace: security-test
 spec:
   selector:
-    app: vulnerable-app
+    app: secure-app
   ports:
     - protocol: TCP
-      port: 80
-      targetPort: 80
-  type: LoadBalancer
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP

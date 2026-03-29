@@ -1,29 +1,40 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: vulnerable-app
+  name: secure-app
   namespace: security-test
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: vulnerable-app
+      app: secure-app
   template:
     metadata:
       labels:
-        app: vulnerable-app
+        app: secure-app
     spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
-        - name: vulnerable-app
+        - name: secure-app
           image: nginx:latest
           ports:
-            - containerPort: 80
-          env:
-            - name: DB_PASSWORD
-              value: "supersecret"
-            - name: API_KEY
-              value: "123456789"
+            - containerPort: 8080
           securityContext:
-            privileged: true
-            runAsUser: 0
-            allowPrivilegeEscalation: true
+            runAsUser: 1000
+            runAsGroup: 3000
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"

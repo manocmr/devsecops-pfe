@@ -11,7 +11,6 @@ pipeline {
     }
 
     stages {
-
         stage('Build App') {
             steps {
                 bat 'mvn clean package -DskipTests'
@@ -28,94 +27,61 @@ pipeline {
             }
         }
 
-        stage('Checkov - Terraform') {
+        stage('IaC Scan - Checkov') {
             steps {
                 echo 'Scan Terraform avec Checkov...'
                 bat 'checkov -d terraform --framework terraform'
+                echo 'Scan Kubernetes YAML avec Checkov...'
+                bat 'checkov -d k8s --framework kubernetes'
             }
         }
 
-        stage('tfsec - Terraform') {
+        stage('IaC Scan - Tfsec') {
             steps {
                 echo 'Scan Terraform avec tfsec...'
                 bat 'tfsec terraform'
             }
         }
 
-        stage('Trivy - Terraform Misconfig') {
+        stage('IaC Scan - Terrascan') {
             steps {
-                echo 'Scan Terraform avec Trivy...'
-                bat 'trivy config terraform --misconfig-scanners terraform --severity HIGH,CRITICAL --exit-code 1 --format table --output trivy-terraform-misconfig.txt'
+                echo 'Scan IaC avec Terrascan...'
+                bat 'terrascan scan -i terraform -d terraform'
+                bat 'terrascan scan -i k8s -d k8s'
             }
         }
 
-
-        stage('Checkov - Kubernetes') {
+        stage('IaC Scan - Trivy') {
             steps {
-                echo 'Scan Kubernetes YAML avec Checkov...'
-                bat 'checkov -d kubernetes --framework kubernetes'
+                echo 'Scan Terraform & K8s avec Trivy...'
+                bat 'trivy config terraform --severity HIGH,CRITICAL --exit-code 1'
+                bat 'trivy config k8s --severity HIGH,CRITICAL --exit-code 1'
             }
         }
 
         stage('Validate Kubernetes YAML') {
             steps {
                 echo 'Validation des manifests Kubernetes...'
-                bat 'kubectl apply --dry-run=client -f kubernetes'
-            }
-        }
-
-        stage('Trivy - Kubernetes Misconfig') {
-            steps {
-                echo 'Scan Kubernetes YAML avec Trivy...'
-                bat 'trivy config kubernetes --severity HIGH,CRITICAL --exit-code 1 --format table --output trivy-k8s-misconfig.txt'
+                bat 'kubectl apply --dry-run=client -f k8s'
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                bat "docker build -t %IMAGE_NAME%:%IMAGE_TAG% ."
+                bat 'docker build -t %IMAGE_NAME%:%IMAGE_TAG% .'
             }
         }
 
-        stage('Trivy - Rapport CVE HIGH/CRITICAL') {
+        stage('Docker Scan - Trivy') {
             steps {
-                echo 'Detection des CVE HIGH et CRITICAL...'
-                bat "trivy image %IMAGE_NAME%:%IMAGE_TAG% --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --format table --output trivy-cve-report.txt"
-            }
-        }
-
-        stage('Trivy - Rapport CVE CRITICAL') {
-            steps {
-                echo 'Detection des CVE CRITICAL...'
-                bat "trivy image %IMAGE_NAME%:%IMAGE_TAG% --scanners vuln --severity CRITICAL --exit-code 0 --format table --output trivy-critical-report.txt"
-            }
-        }
-
-        stage('Trivy - Rapport Licences') {
-            steps {
-                echo 'Detection des licences...'
-                bat "trivy image %IMAGE_NAME%:%IMAGE_TAG% --scanners license --exit-code 0 --format table --output trivy-license-report.txt"
-            }
-        }
-
-        stage('Trivy - Mauvaises Configurations') {
-            steps {
-                echo 'Detection des mauvaises configurations...'
-                bat "trivy config . --exit-code 0 --severity HIGH,CRITICAL --format table --output trivy-misconfig-report.txt"
-            }
-        }
-
-        stage('Trivy - Rapport JSON Global') {
-            steps {
-                echo 'Generation du rapport JSON complet...'
-                bat "trivy image %IMAGE_NAME%:%IMAGE_TAG% --scanners vuln,misconfig,secret --severity HIGH,CRITICAL --format json --output trivy-full-report.json"
-            }
-        }
-
-        stage('Trivy - Blocage Final') {
-            steps {
-                echo 'Blocage pipeline si CVE CRITICAL detectee...'
-                bat "trivy image %IMAGE_NAME%:%IMAGE_TAG% --scanners vuln --severity CRITICAL --exit-code 1 --format table"
+                echo 'Detection des mauvaises pratiques et obsolescences (Trivy Config/Vuln)...'
+                bat 'trivy image %IMAGE_NAME%:%IMAGE_TAG% --scanners misconfig,secret --severity HIGH,CRITICAL --format table --exit-code 1'
+                
+                echo 'Generation du rapport complet (optionnel pour logs)...'
+                bat 'trivy image %IMAGE_NAME%:%IMAGE_TAG% --scanners vuln,misconfig,secret --format json --output trivy-full-report.json'
+                
+                echo 'Blocage pipeline si CVE CRITICAL ou HIGH detectee...'
+                bat 'trivy image %IMAGE_NAME%:%IMAGE_TAG% --scanners vuln --severity HIGH,CRITICAL --exit-code 1'
             }
         }
 
