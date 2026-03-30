@@ -185,20 +185,29 @@ pipeline {
     }
 }
 
-// Fonction utilitaire pour pousser une métrique vers Pushgateway
 def pushMetric(String metricName, String stageName, def value) {
+    def safeJobName = env.JOB_NAME.replaceAll('[^a-zA-Z0-9_-]', '_')
     def payload = """# TYPE jenkins_${metricName} gauge
 jenkins_${metricName}{job="${env.JOB_NAME}",stage="${stageName}",build="${env.BUILD_NUMBER}"} ${value}
 """
-    def url = "${env.PUSHGATEWAY_URL}/metrics/job/${env.JOB_LABEL}/instance/${env.JOB_NAME}"
-    
-    // PowerShell pour Windows (puisque tu utilises bat)
-    bat """
-        powershell -Command "
-            \$body = @'
+    def url = "${env.PUSHGATEWAY_URL}/metrics/job/${env.JOB_LABEL}/instance/${safeJobName}"
+
+    echo "Push URL: ${url}"
+    echo "Payload:\n${payload}"
+
+    powershell """
+\$body = @'
 ${payload}
 '@
-            Invoke-WebRequest -Uri '${url}' -Method POST -Body \$body -ContentType 'text/plain'
-        "
-    """
+
+try {
+    Invoke-WebRequest -Uri '${url}' -Method POST -Body \$body -ContentType 'text/plain'
+    Write-Host 'Push OK'
+}
+catch {
+    Write-Host 'Push FAILED'
+    Write-Host \$_
+    throw
+}
+"""
 }
