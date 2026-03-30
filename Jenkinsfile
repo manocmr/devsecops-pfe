@@ -170,6 +170,7 @@ pipeline {
         always {
             archiveArtifacts artifacts: 'trivy-*.txt, trivy-*.json', allowEmptyArchive: true
             script {
+                // Métrique globale : 0 = success, 1 = failure
                 def buildResult = (currentBuild.result == 'SUCCESS' || currentBuild.result == null) ? 0 : 1
                 pushMetric("build_result", "global", buildResult)
                 pushMetric("build_duration_seconds", "global", currentBuild.duration / 1000)
@@ -187,38 +188,26 @@ pipeline {
 def pushMetric(String metricName, String stageName, def value) {
     def safeJobName = env.JOB_NAME.replaceAll('[^a-zA-Z0-9_-]', '_')
     def payload = """# TYPE jenkins_${metricName} gauge
-jenkins_${metricName}{job="${safeJobName}",stage="${stageName}",build="${env.BUILD_NUMBER}"} ${value}
+jenkins_${metricName}{job="${env.JOB_NAME}",stage="${stageName}",build="${env.BUILD_NUMBER}"} ${value}
 """
     def url = "${env.PUSHGATEWAY_URL}/metrics/job/${env.JOB_LABEL}/instance/${safeJobName}"
 
     echo "Push URL: ${url}"
     echo "Payload:\n${payload}"
 
-    def tmpFile = "metric_${metricName}_${stageName}.txt"
-    writeFile file: tmpFile, text: payload
+    powershell """
+\$body = @'
+${payload}
+'@
 
-    bat "curl.exe -s -X POST --data-binary @${tmpFile} ${url}"
+try {
+    Invoke-WebRequest -Uri '${url}' -Method POST -Body \$body -ContentType 'text/plain'
+    Write-Host 'Push OK'
 }
-```
-
----
-
-## Ce qui a changé par rapport à ton ancien fichier
-
-| Avant ❌ | Après ✅ |
-|---|---|
-| `powershell { Invoke-WebRequest ... }` | `curl.exe -X POST --data-binary @fichier` |
-| Erreur mode non-interactif | Fonctionne en non-interactif |
-| Payload inline dans PowerShell | Payload écrit dans un fichier temporaire |
-| `env.JOB_NAME` dans le payload | `safeJobName` (caractères spéciaux nettoyés) |
-
----
-
-## Après le build, vérifie sur le Pushgateway
-
-Va sur `http://localhost:9091` — tu dois voir tes métriques apparaître comme ça :
-```
-jenkins_stage_status{build="25", job="devsecops-pipeline", stage="build_app"} 0
-jenkins_stage_status{build="25", job="devsecops-pipeline", stage="terraform_validate"} 0
-...
-jenkins_build_result{build="25", stage="global"} 0
+catch {
+    Write-Host 'Push FAILED'
+    Write-Host \$_
+    throw
+}
+"""
+}
