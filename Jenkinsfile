@@ -33,6 +33,12 @@ pipeline {
 
         // Suivi d'état du déploiement production (pour rollback ciblé)
         PRODUCTION_DEPLOYED   = "false"
+
+        // DefectDojo
+        DEFECTDOJO_URL         = "http://localhost:8080"
+        DEFECTDOJO_PRODUCTTYPE = "Jenkins"
+        DEFECTDOJO_PRODUCT     = "devsecops-pipeline"
+        DEFECTDOJO_ENGAGEMENT  = "main"
     }
 
     stages {
@@ -67,11 +73,6 @@ pipeline {
                 }
             }
         }
-
-        // ── IaC Scans ─────────────────────────────────────────────────────────
-        // Les scans ne bloquent pas le pipeline : c'est la Policy Evaluation
-        // qui décide. On force exit 0 pour que le stage reste vert même si
-        // l'outil trouve des violations (comportement attendu).
 
         stage('IaC Scan - Checkov') {
             steps {
@@ -147,6 +148,75 @@ pipeline {
                 script {
                     runStageWithMetric('docker_scan_trivy_image') {
                         bat 'trivy image %IMAGE_FULL% --scanners vuln,misconfig,secret --format json --output trivy-image-report.json || exit 0'
+                    }
+                }
+            }
+        }
+
+        stage('Upload to DefectDojo') {
+            steps {
+                script {
+                    runStageWithMetric('upload_defectdojo') {
+                        withCredentials([string(credentialsId: 'defectdojo-api-token', variable: 'bda9c8b45403ba21c405f0cba4b4d1a41643c60b')]) {
+                            powershell '''
+$ErrorActionPreference = "Continue"
+
+function Upload-ToDefectDojo {
+    param(
+        [string]$FilePath,
+        [string]$ScanType,
+        [string]$TestTitle
+    )
+
+    if (!(Test-Path $FilePath)) {
+        Write-Host "Fichier absent: $FilePath"
+        return
+    }
+
+    Write-Host "Upload vers DefectDojo: $FilePath ($ScanType)"
+
+    $uri = "$env:DEFECTDOJO_URL/api/v2/reimport-scan/"
+    $headers = @{
+        "Authorization" = "Token $env:DD_API_TOKEN"
+        "Accept"        = "application/json"
+    }
+
+    $form = @{
+        "scan_type"           = $ScanType
+        "product_type_name"   = $env:DEFECTDOJO_PRODUCTTYPE
+        "product_name"        = $env:DEFECTDOJO_PRODUCT
+        "engagement_name"     = $env:DEFECTDOJO_ENGAGEMENT
+        "test_title"          = $TestTitle
+        "auto_create_context" = "true"
+        "active"              = "true"
+        "verified"            = "true"
+        "close_old_findings"  = "false"
+        "do_not_reactivate"   = "false"
+        "minimum_severity"    = "Info"
+        "file"                = Get-Item $FilePath
+    }
+
+    try {
+        $response = Invoke-RestMethod -Uri $uri -Method Post -Headers $headers -Form $form
+        Write-Host "Upload OK: $FilePath"
+        $response | ConvertTo-Json -Depth 10
+    }
+    catch {
+        Write-Host "ECHEC upload DefectDojo pour $FilePath"
+        Write-Host $_.Exception.Message
+    }
+}
+
+Upload-ToDefectDojo "trivy-image-report.json"   "Trivy Scan"     "Trivy Image"
+Upload-ToDefectDojo "trivy-terraform.json"      "Trivy Config"   "Trivy Terraform"
+Upload-ToDefectDojo "trivy-kubernetes.json"     "Trivy Config"   "Trivy Kubernetes"
+Upload-ToDefectDojo "checkov-terraform.json"    "Checkov Scan"   "Checkov Terraform"
+Upload-ToDefectDojo "checkov-kubernetes.json"   "Checkov Scan"   "Checkov Kubernetes"
+Upload-ToDefectDojo "tfsec-report.json"         "Tfsec Scan"     "Tfsec Terraform"
+Upload-ToDefectDojo "terrascan-terraform.json"  "Terrascan Scan" "Terrascan Terraform"
+Upload-ToDefectDojo "terrascan-kubernetes.json" "Terrascan Scan" "Terrascan Kubernetes"
+'''
+                        }
                     }
                 }
             }
@@ -253,8 +323,6 @@ if ($critical -gt 0) { $block = $true }
 if ($high -gt 5) { $block = $true }
 if ($iacFailed -gt 10) { $block = $true }
 
-# Score normalisé : pénalités plafonnées par catégorie pour éviter
-# des valeurs aberrantes avec un grand nombre de findings.
 $penaltyCritical = [Math]::Min($critical * 20, 60)
 $penaltyHigh     = [Math]::Min($high * 5, 30)
 $penaltySecrets  = [Math]::Min($secrets * 15, 30)
@@ -349,7 +417,6 @@ Write-Host "  SCORE=$score  BLOCK_DEPLOY=$block"
                 script {
                     runStageWithMetric('smoke_tests_staging') {
                         echo 'Executer ici les smoke tests de staging'
-                        // TODO: ajouter curl / newman / pytest smoke tests
                     }
                 }
             }
@@ -378,8 +445,6 @@ Write-Host "  SCORE=$score  BLOCK_DEPLOY=$block"
                             bat 'kubectl rollout status deployment/%K8S_DEPLOYMENT_NAME% -n %PRODUCTION_NAMESPACE% --timeout=180s'
                         }
                     }
-                    // Marquer le déploiement production comme effectué
-                    // pour activer le rollback ciblé en cas d'échec ultérieur.
                     env.PRODUCTION_DEPLOYED = 'true'
                 }
             }
@@ -388,18 +453,11 @@ Write-Host "  SCORE=$score  BLOCK_DEPLOY=$block"
 
     post {
         always {
-            // FIX: suppression de l'espace après la virgule dans le glob
             archiveArtifacts artifacts: '*.json,security-summary.env', allowEmptyArchive: true
 
             script {
-                // ── Accumulation de toutes les métriques dans un seul .prom ──
-                // puis push groupé vers le Pushgateway (1 seul POST).
-                // Avantage : les labels précédents ne sont pas écrasés
-                // partiellement si une métrique individuelle échoue.
-
                 def lines = []
 
-                // Helper local pour ajouter une ligne au buffer
                 def addLine = { String metricName, String stageName, def value, Map extraLabels = [:] ->
                     def safeJob   = (env.JOB_NAME ?: 'unknown').replaceAll('[^a-zA-Z0-9_-]', '_')
                     def safeStage = (stageName ?: 'unknown').replaceAll('[^a-zA-Z0-9_-]', '_')
@@ -408,11 +466,9 @@ Write-Host "  SCORE=$score  BLOCK_DEPLOY=$block"
                     lines << "${metricName}{${labelStr}} ${value}"
                 }
 
-                // Build global
                 addLine('jenkins_build_result',           'global', currentBuild.currentResult == 'SUCCESS' ? 0 : 1)
                 addLine('jenkins_build_duration_seconds', 'global', (currentBuild.duration / 1000) as long)
 
-                // Security findings
                 addLine('security_findings_total', 'critical', env.CRITICAL_FINDINGS ?: '0', [severity: 'CRITICAL', tool: 'global'])
                 addLine('security_findings_total', 'high',     env.HIGH_FINDINGS     ?: '0', [severity: 'HIGH',     tool: 'global'])
                 addLine('security_findings_total', 'medium',   env.MEDIUM_FINDINGS   ?: '0', [severity: 'MEDIUM',   tool: 'global'])
@@ -422,7 +478,6 @@ Write-Host "  SCORE=$score  BLOCK_DEPLOY=$block"
                 addLine('security_compliance_score', 'global', env.SECURITY_SCORE    ?: '0', [scope: 'global'])
                 addLine('deployment_blocked',        'global', (env.SECURITY_BLOCK_DEPLOY == 'true' ? 1 : 0), [scope: 'global'])
 
-                // Générer le fichier .prom avec HELP/TYPE pour Prometheus
                 def promLines = []
                 promLines << "# HELP jenkins_build_result 0=SUCCESS 1=FAILURE"
                 promLines << "# TYPE jenkins_build_result gauge"
@@ -439,11 +494,10 @@ Write-Host "  SCORE=$score  BLOCK_DEPLOY=$block"
                 promLines << "# HELP deployment_blocked 1 si le déploiement a été bloqué par la security gate"
                 promLines << "# TYPE deployment_blocked gauge"
                 promLines += lines
-                promLines << "" // ligne vide finale requise par le format Prometheus
+                promLines << ""
 
                 writeFile file: 'metrics.prom', text: promLines.join('\n')
 
-                // Push groupé — un seul appel HTTP
                 def safeJobName = (env.JOB_NAME ?: 'unknown').replaceAll('[^a-zA-Z0-9_-]', '_')
                 def pushUrl = "${env.PUSHGATEWAY_URL}/metrics/job/${env.JOB_LABEL}/instance/${safeJobName}"
 
@@ -459,7 +513,6 @@ catch {
     exit 0
 }
 """
-                // Archiver aussi le fichier .prom pour debug
                 archiveArtifacts artifacts: 'metrics.prom', allowEmptyArchive: true
             }
         }
@@ -471,10 +524,6 @@ catch {
         failure {
             echo 'ECHEC — pipeline bloqué'
             script {
-                // FIX: rollback uniquement si le déploiement production
-                // a effectivement eu lieu (PRODUCTION_DEPLOYED=true).
-                // Avant le fix, la condition était inversée et pouvait tenter
-                // un rollback même quand rien n'avait été déployé.
                 if (env.PRODUCTION_DEPLOYED == 'true') {
                     echo "Rollback production déclenché pour ${env.K8S_DEPLOYMENT_NAME}"
                     withCredentials([file(credentialsId: 'kubeconfig-prod', variable: 'KUBECONFIG')]) {
@@ -500,12 +549,6 @@ catch {
     }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * Exécute un bloc et pousse automatiquement les métriques de durée/statut
- * du stage vers le buffer global (via pushMetric).
- */
 def runStageWithMetric(String metricStageName, Closure body) {
     def status = 0
     def start  = System.currentTimeMillis()
@@ -522,11 +565,6 @@ def runStageWithMetric(String metricStageName, Closure body) {
     }
 }
 
-/**
- * Push immédiat d'une métrique individuelle vers le Pushgateway.
- * Utilisé par runStageWithMetric() pour les métriques de stage en temps réel.
- * Pour les métriques globales du post{}, préférer le push groupé via metrics.prom.
- */
 def pushMetric(String metricName, String stageName, def value, Map extraLabels = [:]) {
     def safeJobName   = (env.JOB_NAME ?: 'unknown_job').replaceAll('[^a-zA-Z0-9_-]', '_')
     def safeStageName = (stageName ?: 'unknown_stage').replaceAll('[^a-zA-Z0-9_-]', '_')
