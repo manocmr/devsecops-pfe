@@ -458,10 +458,10 @@ Write-Host "  SCORE=$score  BLOCK_DEPLOY=$block"
             script {
                 def lines = []
 
-                def addLine = { String metricName, String stageName, def value, Map extraLabels = [:] ->
+                def addLine = { String metricName, String stageName, def value, Map extraLabels = null ->
                     def safeJob   = (env.JOB_NAME ?: 'unknown').replaceAll('[^a-zA-Z0-9_-]', '_')
                     def safeStage = (stageName ?: 'unknown').replaceAll('[^a-zA-Z0-9_-]', '_')
-                    def labels    = [job: safeJob, stage: safeStage, build: env.BUILD_NUMBER] + extraLabels
+                    def labels    = [job: safeJob, stage: safeStage, build: env.BUILD_NUMBER ?: '0'] + (extraLabels ?: [:])
                     def labelStr  = labels.collect { k, v -> "${k}=\"${v.toString().replaceAll('"', '\\"')}\"" }.join(',')
                     lines << "${metricName}{${labelStr}} ${value}"
                 }
@@ -565,7 +565,7 @@ def runStageWithMetric(String metricStageName, Closure body) {
     }
 }
 
-def pushMetric(String metricName, String stageName, def value, Map extraLabels = [:]) {
+def pushMetric(String metricName, String stageName, def value, Map extraLabels = null) {
     def safeJobName   = (env.JOB_NAME ?: 'unknown_job').replaceAll('[^a-zA-Z0-9_-]', '_')
     def safeStageName = (stageName ?: 'unknown_stage').replaceAll('[^a-zA-Z0-9_-]', '_')
 
@@ -573,7 +573,7 @@ def pushMetric(String metricName, String stageName, def value, Map extraLabels =
         job  : safeJobName,
         stage: safeStageName,
         build: env.BUILD_NUMBER ?: '0'
-    ] + extraLabels
+    ] + (extraLabels ?: [:])
 
     def labelString = labels.collect { k, v ->
         "${k}=\"${v.toString().replaceAll('"', '\\"')}\""
