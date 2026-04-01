@@ -1,13 +1,12 @@
 pipeline {
     agent any
 
-    // 1. Déclaration des outils (doivent correspondre aux noms dans Jenkins > Manage Jenkins > Tools)
-    tools {
-        jdk 'JDK-21'    // Remplace par le nom exact de ton JDK dans Jenkins (ex: "jdk17")
-        maven 'Maven-3.9' // Remplace par le nom exact de ton Maven dans Jenkins (ex: "mvn3")
-    }
+    // Si tu préfères utiliser les outils installés sur ta machine Windows, on définit directement JAVA_HOME ci-dessous
 
     environment {
+        // 👇 Chemin exact de ton JDK en local
+        JAVA_HOME       = "C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.10.7-hotspot" 
+
         APP_NAME        = "devsecops-app"
         IMAGE_NAME      = "${env.APP_NAME}:${env.BUILD_NUMBER}"
         
