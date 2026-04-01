@@ -18,6 +18,7 @@ pipeline {
         IMAGE_FULL            = "${REGISTRY}/${APP_NAME}:${IMAGE_TAG}"
 
         PUSHGATEWAY_URL       = "http://pushgateway.monitoring.svc:9091"
+        PUSHGATEWAY_ENABLED   = "false" // Disable metrics push by default out-of-cluster
         JOB_LABEL             = "jenkins_devsecops"
 
         STAGING_NAMESPACE     = "staging"
@@ -127,7 +128,11 @@ pipeline {
             steps {
                 script {
                     runStageWithMetric('validate_k8s_yaml') {
-                        bat 'kubectl apply --dry-run=client --validate=false -f kubernetes || exit 0'
+                        // Using KUBECONFIG prevents kubectl from falling back to localhost:8080
+                        // where it hits DefectDojo HTML resulting in `invalid character <` YAML parser errors
+                        withCredentials([file(credentialsId: 'kubeconfig-staging', variable: 'KUBECONFIG')]) {
+                            bat 'kubectl apply --dry-run=client -f kubernetes || exit 0'
+                        }
                     }
                 }
             }
@@ -501,7 +506,8 @@ Write-Host "  SCORE=$score  BLOCK_DEPLOY=$block"
                 def safeJobName = (env.JOB_NAME ?: 'unknown').replaceAll('[^a-zA-Z0-9_-]', '_')
                 def pushUrl = "${env.PUSHGATEWAY_URL}/metrics/job/${env.JOB_LABEL}/instance/${safeJobName}"
 
-                powershell returnStatus: true, script: """
+                if (env.PUSHGATEWAY_ENABLED == 'true') {
+                    powershell returnStatus: true, script: """
 \$payload = Get-Content -Path 'metrics.prom' -Raw
 try {
     Invoke-RestMethod -Uri '${pushUrl}' -Method PUT -Body \$payload -ContentType 'text/plain; version=0.0.4'
@@ -513,6 +519,9 @@ catch {
     exit 0
 }
 """
+                } else {
+                    echo "Metrics compilation OK - pushgateway is disabled in environment"
+                }
                 archiveArtifacts artifacts: 'metrics.prom', allowEmptyArchive: true
             }
         }
@@ -581,6 +590,8 @@ def pushMetric(String metricName, String stageName, def value, Map extraLabels =
 
     def payload = "# TYPE ${metricName} gauge\n${metricName}{${labelString}} ${value}\n"
     def url     = "${env.PUSHGATEWAY_URL}/metrics/job/${env.JOB_LABEL}/instance/${safeJobName}"
+
+    if (env.PUSHGATEWAY_ENABLED != 'true') { return }
 
     powershell returnStatus: true, script: """
 \$body = @'
