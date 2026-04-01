@@ -58,7 +58,7 @@ pipeline {
                         script {
                             if (fileExists('terraform')) {
                                 catchError(buildResult: 'FAILURE') {
-                                    bat 'checkov -d terraform --framework terraform -o json > checkov-terraform.json'
+                                    bat 'checkov -d terraform --framework terraform -o sarif > checkov-terraform.sarif'
                                 }
                             }
                         }
@@ -77,7 +77,7 @@ pipeline {
                         script {
                             if (fileExists('terraform')) {
                                 catchError(buildResult: 'FAILURE') {
-                                    bat 'terrascan scan -i terraform -d terraform -o json > terrascan-terraform.json'
+                                    bat 'terrascan scan -i terraform -d terraform -o sarif > terrascan-terraform.sarif'
                                 }
                             }
                         }
@@ -89,7 +89,7 @@ pipeline {
         stage('3. Scan Docker Image (Trivy JSON)') {
             steps {
                 catchError(buildResult: 'FAILURE') {
-                    bat "trivy image --format json --output trivy-report.json --exit-code 1 --severity HIGH,CRITICAL --scanners vuln,misconfig,secret ${env.IMAGE_NAME}"
+                    bat "trivy image --format sarif --output trivy-report.sarif --exit-code 1 --severity HIGH,CRITICAL --scanners vuln,misconfig,secret ${env.IMAGE_NAME}"
                 }
             }
         }
@@ -98,12 +98,12 @@ pipeline {
     post {
         always {
             script {
-                echo '📤 Envoi des rapports JSON à DefectDojo...'
+                echo '📤 Envoi des rapports SARIF/JSON à DefectDojo...'
                 def reports = [
-                    'trivy-report.json'       : 'Trivy Scan',
-                    'checkov-terraform.json'  : 'Checkov Scan',
-                    'tfsec-report.json'       : 'TFSec Scan',
-                    'terrascan-terraform.json': 'Terrascan Scan'
+                    'trivy-report.sarif'      : 'SARIF',
+                    'checkov-terraform.sarif' : 'SARIF',
+                    'tfsec-report.json'       : 'Tfsec Scan',
+                    'terrascan-terraform.sarif': 'SARIF'
                 ]
                 
                 // 2. Ajout de auto_create_context=true et product_type_name pour corriger l'erreur DefectDojo
