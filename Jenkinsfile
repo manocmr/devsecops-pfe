@@ -1,15 +1,20 @@
 pipeline {
     agent any
 
+    // 1. Déclaration des outils (doivent correspondre aux noms dans Jenkins > Manage Jenkins > Tools)
+    tools {
+        jdk 'JDK-21'    // Remplace par le nom exact de ton JDK dans Jenkins (ex: "jdk17")
+        maven 'Maven-3.9' // Remplace par le nom exact de ton Maven dans Jenkins (ex: "mvn3")
+    }
+
     environment {
         APP_NAME        = "devsecops-app"
         IMAGE_NAME      = "${env.APP_NAME}:${env.BUILD_NUMBER}"
         
-        // --- Variables d'intégration ---
-        // Remplace par tes véritables URLs et Token DefectDojo
         DEFECTDOJO_URL  = "http://localhost:8080"
         DD_API_TOKEN    = "bda9c8b45403ba21c405f0cba4b4d1a41643c60b"
         PUSHGATEWAY_URL = "http://localhost:9091"
+        PRODUCT_TYPE    = "Jenkins" // Requis par DefectDojo pour créer le produit
     }
 
     stages {
@@ -19,15 +24,15 @@ pipeline {
             }
         }
 
-        stage('1. Build Docker Image') {
+        stage('1. Build App & Docker Image') {
             steps {
+                // Sur Windows Jenkins, utilisez "call mvn" si Maven est installé localement, ou juste "mvn" s'il vient de la directive tools.
                 bat 'mvn clean package -DskipTests'
                 bat "docker build -t ${env.IMAGE_NAME} ."
             }
         }
 
         stage('2. Analyse IaC (Scan JSON & Logique Bloquante)') {
-            // failFast false permet aux autres scans de finir de générer leurs JSON même si l'un échoue
             failFast false 
             parallel {
                 stage('Validation Templates') {
@@ -84,7 +89,6 @@ pipeline {
 
         stage('3. Scan Docker Image (Trivy JSON)') {
             steps {
-                // Détecte vulnérabilités -> génère le JSON -> bloque (exit 1) la pipeline si sévérité haute/critique
                 catchError(buildResult: 'FAILURE') {
                     bat "trivy image --format json --output trivy-report.json --exit-code 1 --severity HIGH,CRITICAL --scanners vuln,misconfig,secret ${env.IMAGE_NAME}"
                 }
@@ -94,7 +98,6 @@ pipeline {
 
     post {
         always {
-            // S'exécute TOUJOURS (même si la pipeline est bloquée (fail) par une vulnérabilité)
             script {
                 echo '📤 Envoi des rapports JSON à DefectDojo...'
                 def reports = [
@@ -104,24 +107,28 @@ pipeline {
                     'terrascan-terraform.json': 'Terrascan Scan'
                 ]
                 
-                // Utilisation de la commande "curl" native sous Windows pour simplifier drastiquement l'envoi API
+                // 2. Ajout de auto_create_context=true et product_type_name pour corriger l'erreur DefectDojo
                 reports.each { file, scan_type ->
                     if (fileExists(file)) {
-                        bat """curl.exe -s -X POST "${env.DEFECTDOJO_URL}/api/v2/reimport-scan/" -H "Authorization: Token ${env.DD_API_TOKEN}" -F "scan_type=${scan_type}" -F "file=@${file}" -F "engagement_name=main" -F "product_name=${env.APP_NAME}" """
+                        bat """curl.exe -s -X POST "${env.DEFECTDOJO_URL}/api/v2/reimport-scan/" -H "Authorization: Token ${env.DD_API_TOKEN}" -F "scan_type=${scan_type}" -F "file=@${file}" -F "engagement_name=main" -F "product_name=${env.APP_NAME}" -F "product_type_name=${env.PRODUCT_TYPE}" -F "auto_create_context=true" """
                     }
                 }
 
                 echo '📊 Poussée de la métrique globale vers Grafana (Prometheus Pushgateway)...'
-                // Extrait un simple 1 (Succès) ou 0 (Échec) pour Grafana
                 def buildSuccess = (currentBuild.currentResult == 'SUCCESS') ? 1 : 0
-                bat """echo jenkins_build_success ${buildSuccess} | curl.exe --data-binary @- ${env.PUSHGATEWAY_URL}/metrics/job/devsecops_pipeline"""
+                
+                // 3. Contournement du problème \r Windows (CRLF) en utilisant PowerShell Invoke-RestMethod
+                powershell """
+                \$body = "jenkins_build_success ${buildSuccess}`n"
+                Invoke-RestMethod -Uri "${env.PUSHGATEWAY_URL}/metrics/job/devsecops_pipeline" -Method POST -Body \$body -ContentType "text/plain"
+                """
             }
         }
         success {
             echo "✅ Pipeline réussie ! Code clean, images validées ✅."
         }
         failure {
-            echo "❌ Pipeline bloquée : Des défauts sécuritaires ont été trouvés. Va voir DefectDojo ou Grafana pour les détails."
+            echo "❌ Pipeline bloquée : Des défauts sécuritaires ont été trouvés ou le build a échoué. Va voir DefectDojo ou Grafana pour les détails."
         }
     }
 }
