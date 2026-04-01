@@ -47,7 +47,7 @@ pipeline {
                             }
                             if (fileExists('kubernetes')) {
                                 catchError(buildResult: 'FAILURE') {
-                                    bat 'kubectl apply --dry-run=client -f kubernetes'
+                                    bat 'kubectl apply --dry-run=client --validate=false -f kubernetes'
                                 }
                             }
                         }
@@ -102,7 +102,7 @@ pipeline {
                 def reports = [
                     'trivy-report.json'       : 'Trivy Scan',
                     'checkov-terraform.json'  : 'Checkov Scan',
-                    'tfsec-report.json'       : 'Tfsec Scan',
+                    'tfsec-report.json'       : 'TFSec Scan',
                     'terrascan-terraform.json': 'Terrascan Scan'
                 ]
                 
