@@ -1,33 +1,28 @@
 version: '3.8'
 
-# ══════════════════════════════════════════════════════════════════
-#  Stack DefectDojo — DevSecOps
-#  Services : PostgreSQL · Redis · Celery Worker · DefectDojo
-# ══════════════════════════════════════════════════════════════════
-
 services:
 
   # ── Base de données ──────────────────────────────────────────────
   db:
     image: postgres:16
-    container_name: defectdojo-db
+    container_name: postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: defectdojo
-      POSTGRES_PASSWORD: defectdojo
-      POSTGRES_DB: defectdojo
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
     volumes:
-      - defectdojo_db:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U defectdojo"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # ── Cache / Queue ─────────────────────────────────────────────────
+  # ── Cache Redis ──────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
-    container_name: defectdojo-redis
+    container_name: redis
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -35,54 +30,30 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── Worker Celery (tâches asynchrones) ───────────────────────────
-  celery-worker:
-    image: defectdojo/defectdojo-django:latest
-    container_name: defectdojo-celery-worker
+  # ── Grafana ──────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    entrypoint: ["/entrypoint-celery-worker.sh"]
-    environment:
-      DD_DATABASE_URL: "postgresql://defectdojo:defectdojo@db:5432/defectdojo"
-      DD_CELERY_BROKER_URL: "redis://redis:6379/0"
-      DD_SECRET_KEY: "zT9F7xJv2sKQ4mYpL8wN3eR1cD6uH0aBqG5VtXk9PjU="
-      DD_ALLOWED_HOSTS: "*"
-
-  # ── Application Django DefectDojo ─────────────────────────────────
-  defectdojo:
-    image: defectdojo/defectdojo-django:latest
-    container_name: defectdojo
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     ports:
-      - "8080:8081"
-    environment:
-      DD_DATABASE_URL: "postgresql://defectdojo:defectdojo@db:5432/defectdojo"
-      DD_CELERY_BROKER_URL: "redis://redis:6379/0"
-      DD_SECRET_KEY: "Qm8rZ2YpXc1N5KJdV0sT4bH7Wl3F9eUaR6CqP2kLnIg="
-      DD_ALLOWED_HOSTS: "*"
-      DD_ADMIN_USER: "admin"
-      DD_ADMIN_PASSWORD: "Admin1234!"
-      DD_ADMIN_MAIL: "admin@devsecops.local"
-      DD_INITIALIZE: "true"
+      - "3000:3000"
     volumes:
-      - defectdojo_media:/app/media
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/v2/users/ || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 10
-      start_period: 60s
+      - grafana_data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
 
-# ── Volumes persistants ───────────────────────────────────────────
+  # ── Prometheus ───────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+# ── Volumes ───────────────────────────────────────────────────────
 volumes:
-  defectdojo_db:
-  defectdojo_media:
+  postgres_data:
+  grafana_data:
