@@ -89,6 +89,27 @@ pipeline {
                 }
             }
         }
+
+        stage('4. Sécurité Kubernetes') {
+            steps {
+                script {
+                    catchError(buildResult: 'FAILURE') {
+                        bat 'kubectl delete job kube-bench --ignore-not-found=true'
+                        bat 'kubectl apply -f kubernetes/jobs/kube-bench-job.yaml'
+                        bat 'kubectl wait --for=condition=complete job/kube-bench --timeout=180s'
+                        bat 'kubectl logs job/kube-bench > kube-bench.json'
+                        bat 'kubectl delete job kube-bench --ignore-not-found=true'
+                    }
+                    catchError(buildResult: 'FAILURE') {
+                        bat 'kubectl delete job kube-hunter --ignore-not-found=true'
+                        bat 'kubectl apply -f kubernetes/jobs/kube-hunter-job.yaml'
+                        bat 'kubectl wait --for=condition=complete job/kube-hunter --timeout=180s'
+                        bat 'kubectl logs job/kube-hunter > kube-hunter.json'
+                        bat 'kubectl delete job kube-hunter --ignore-not-found=true'
+                    }
+                }
+            }
+        }
     }
 
     post {
@@ -100,8 +121,10 @@ pipeline {
                 def reports = [
                     'trivy-report.json'       : 'Trivy Scan',
                     'checkov-terraform.json'  : 'Checkov Scan',
-                    'tfsec-report.json'       : 'Tfsec Scan',
-                    'terrascan-terraform.json': 'Terrascan Scan'
+                    'tfsec-report.json'       : 'Tfsec',
+                    'terrascan-terraform.json': 'Terrascan Scan',
+                    'kube-bench.json'         : 'Kube Bench Scan',
+                    'kube-hunter.json'        : 'Kube Hunter Scan'
                 ]
                 
                 // Récupération sécurisée du token via les Credentials Jenkins

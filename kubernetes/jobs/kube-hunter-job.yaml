@@ -1,0 +1,16 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kube-hunter
+  namespace: default
+spec:
+  template:
+    metadata:
+      labels:
+        app: kube-hunter
+    spec:
+      containers:
+        - name: kube-hunter
+          image: aquasec/kube-hunter:latest
+          command: ["kube-hunter", "--pod", "--report", "json"]
+      restartPolicy: Never
