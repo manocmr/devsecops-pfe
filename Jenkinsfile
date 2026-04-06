@@ -30,6 +30,14 @@ pipeline {
             }
         }
 
+        stage('1.5 Scan de Secrets (Trivy)') {
+            steps {
+                catchError(buildResult: 'FAILURE') {
+                    bat 'trivy fs --format json --output trivy-secrets.json --exit-code 1 --scanners secret .'
+                }
+            }
+        }
+
         stage('2. Analyse IaC (Scan JSON natif)') {
             failFast false 
             parallel {
@@ -46,7 +54,7 @@ pipeline {
                             }
                             if (fileExists('kubernetes')) {
                                 catchError(buildResult: 'FAILURE') {
-                                    bat 'kubectl apply --dry-run=client --validate=false -f kubernetes'
+                                    bat 'kubectl apply --dry-run=client --validate=true -f kubernetes'
                                 }
                             }
                         }
@@ -113,6 +121,18 @@ pipeline {
                 }
             }
         }
+
+        stage('5. Security Gate') {
+            steps {
+                script {
+                    if (currentBuild.currentResult == 'FAILURE') {
+                        error('Pipeline bloquée : Des vulnérabilités de haut niveau ont été détectées au cours des scans.')
+                    } else {
+                        echo 'Pipeline OK : Aucune vulnérabilité bloquante détectée.'
+                    }
+                }
+            }
+        }
     }
 
     post {
@@ -123,6 +143,7 @@ pipeline {
                 // Mappage strict format JSON natif -> Parsers officiels DefectDojo
                 def reports = [
                     'trivy-report.json'       : 'Trivy Scan',
+                    'trivy-secrets.json'      : 'Trivy Scan',
                     'checkov-terraform.json'  : 'Checkov Scan',
                     'tfsec-report.json'       : 'TFSec Scan',
                     'terrascan-terraform.json': 'Terrascan Scan',
