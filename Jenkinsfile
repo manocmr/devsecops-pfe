@@ -11,6 +11,9 @@ pipeline {
         // Exclusivité DefectDojo
         DEFECTDOJO_URL  = "http://localhost:8080"
         PRODUCT_TYPE    = "Jenkins" 
+        
+        // Configuration de kubectl pour pointer sur Minikube (depuis Jenkins)
+        KUBECONFIG      = "C:\\Users\\INFO\\.kube\\config"
     }
 
     stages {
@@ -121,7 +124,7 @@ pipeline {
                 def reports = [
                     'trivy-report.json'       : 'Trivy Scan',
                     'checkov-terraform.json'  : 'Checkov Scan',
-                    'tfsec-report.json'       : 'Tfsec',
+                    'tfsec-report.json'       : 'TFSec Scan',
                     'terrascan-terraform.json': 'Terrascan Scan',
                     'kube-bench.json'         : 'Kube Bench Scan',
                     'kube-hunter.json'        : 'Kube Hunter Scan'
