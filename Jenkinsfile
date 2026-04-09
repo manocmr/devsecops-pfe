@@ -149,7 +149,12 @@ pipeline {
                         ''', returnStdout: true).trim()
                         
                         // Parse powershell stdout to safely extract the number
-                        out.eachLine { line -> if (line.matches("^\\d+\$")) highCritCount = line.toInteger() }
+                        def lines = out.split('\r?\n')
+                        for (def i = 0; i < lines.length; i++) {
+                            if (lines[i].matches("^\\d+\$")) {
+                                highCritCount = lines[i].toInteger()
+                            }
+                        }
                     }
 
                     if (fileExists('trivy-secrets.json')) {
@@ -167,7 +172,12 @@ pipeline {
                         ''', returnStdout: true).trim()
 
                         // Parse powershell stdout 
-                        out.eachLine { line -> if (line.matches("^\\d+\$")) secretCount = line.toInteger() }
+                        def lines = out.split('\r?\n')
+                        for (def i = 0; i < lines.length; i++) {
+                            if (lines[i].matches("^\\d+\$")) {
+                                secretCount = lines[i].toInteger()
+                            }
+                        }
                     }
 
                     if (highCritCount > 0 || secretCount > 0) {
@@ -218,7 +228,7 @@ pipeline {
                     'tfsec-report.json'       : 'TFSec Scan',
                     'terrascan-terraform.json': 'Terrascan Scan',
                     'kube-bench.json'         : 'kube-bench Scan',
-                    'kube-hunter.json'        : 'kube-hunter Scan'
+                    'kube-hunter.json'        : 'KubeHunter Scan'
                 ]
                 
                 // Récupération sécurisée du token via les Credentials Jenkins
