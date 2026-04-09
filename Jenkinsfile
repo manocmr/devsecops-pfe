@@ -5,7 +5,10 @@ pipeline {
         // Chemins sécurisés via Jenkins Credentials (à configurer côté Jenkins)
         // Note: Assure-toi d'avoir créé ces credentials correspondants.
         JAVA_HOME       = credentials('java-home-cred')
-        KUBECONFIG      = credentials('kubeconfig-cred')
+        
+        // On utilise directement le fichier config minikube local au lieu du credential
+        // Car Minikube change de port de connexion (ex: 54369 -> 61586) à chaque redémarrage !
+        KUBECONFIG      = "C:\\Users\\INFO\\.kube\\config"
 
         APP_NAME        = "devsecops-app"
         IMAGE_NAME      = "${env.APP_NAME}:${env.BUILD_NUMBER}"
@@ -128,29 +131,43 @@ pipeline {
                     def secretCount = 0
 
                     if (fileExists('trivy-report.json')) {
-                        def trivyReport = readJSON file: 'trivy-report.json'
-                        if (trivyReport.Results) {
-                            trivyReport.Results.each { result ->
-                                if (result.Vulnerabilities) {
-                                    result.Vulnerabilities.each { vuln ->
-                                        if (vuln.Severity == 'HIGH' || vuln.Severity == 'CRITICAL') {
-                                            highCritCount++
+                        def out = powershell(script: '''
+                            $data = Get-Content -Raw trivy-report.json | ConvertFrom-Json
+                            $count = 0
+                            if ($null -ne $data -and $null -ne $data.Results) {
+                                foreach ($res in $data.Results) {
+                                    if ($null -ne $res.Vulnerabilities) {
+                                        foreach ($vuln in $res.Vulnerabilities) {
+                                            if ($vuln.Severity -eq 'HIGH' -or $vuln.Severity -eq 'CRITICAL') {
+                                                $count++
+                                            }
                                         }
                                     }
                                 }
                             }
-                        }
+                            Write-Output $count
+                        ''', returnStdout: true).trim()
+                        
+                        // Parse powershell stdout to safely extract the number
+                        out.eachLine { line -> if (line.matches("^\\d+\$")) highCritCount = line.toInteger() }
                     }
 
                     if (fileExists('trivy-secrets.json')) {
-                        def secretsReport = readJSON file: 'trivy-secrets.json'
-                        if (secretsReport.Results) {
-                            secretsReport.Results.each { result ->
-                                if (result.Secrets) {
-                                    secretCount += result.Secrets.size()
+                        def out = powershell(script: '''
+                            $data = Get-Content -Raw trivy-secrets.json | ConvertFrom-Json
+                            $count = 0
+                            if ($null -ne $data -and $null -ne $data.Results) {
+                                foreach ($res in $data.Results) {
+                                    if ($null -ne $res.Secrets) {
+                                        $count += $res.Secrets.count
+                                    }
                                 }
                             }
-                        }
+                            Write-Output $count
+                        ''', returnStdout: true).trim()
+
+                        // Parse powershell stdout 
+                        out.eachLine { line -> if (line.matches("^\\d+\$")) secretCount = line.toInteger() }
                     }
 
                     if (highCritCount > 0 || secretCount > 0) {
@@ -200,8 +217,8 @@ pipeline {
                     'checkov-terraform.json'  : 'Checkov Scan',
                     'tfsec-report.json'       : 'TFSec Scan',
                     'terrascan-terraform.json': 'Terrascan Scan',
-                    'kube-bench.json'         : 'Kube Bench Scan',
-                    'kube-hunter.json'        : 'Kube Hunter Scan'
+                    'kube-bench.json'         : 'kube-bench Scan',
+                    'kube-hunter.json'        : 'kube-hunter Scan'
                 ]
                 
                 // Récupération sécurisée du token via les Credentials Jenkins
@@ -217,16 +234,16 @@ pipeline {
             }
         }
         success {
-            echo "✅ Pipeline réussie ! Code clean, aucune faille détectée."
+            echo "Pipeline réussie, aucune faille détectée."
             
-            // Objectif PFE : Automatisation de la réponse (Notifications de succès)
-            // slackSend color: "good", message: "✅ Déploiement DevSecOps réussi : ${env.APP_NAME} propulsé sur Staging et Prod."
+            //Automatisation de la réponse (Notifications de succès)
+            // slackSend color: "good", message: " Déploiement DevSecOps réussi : ${env.APP_NAME} propulsé sur Staging et Prod."
         }
         failure {
-            echo "❌ Pipeline bloquée : Des défauts sécuritaires ont été trouvés. Vérifie les détails dans DefectDojo."
+            echo "Pipeline bloquée : Des défauts sécuritaires ont été trouvés. Vérifie les détails dans DefectDojo."
             
             // Objectif PFE : Réponse automatique aux incidents (Génération d'alertes en temps réel)
-            echo "📧 Déclenchement automatique des alertes sécurité..."
+            echo "Déclenchement automatique des alertes sécurité..."
             
             // 1. Notification par Email 
             // (Nécessite la configuration d'un serveur SMTP dans 'Jenkins > Manage > System')
