@@ -2,18 +2,16 @@ pipeline {
     agent any
 
     environment {
-        // Chemin exact de ton JDK local
-        JAVA_HOME       = "C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.10.7-hotspot" 
+        // Chemins sécurisés via Jenkins Credentials (à configurer côté Jenkins)
+        // Note: Assure-toi d'avoir créé ces credentials correspondants.
+        JAVA_HOME       = credentials('java-home-cred')
+        KUBECONFIG      = credentials('kubeconfig-cred')
 
         APP_NAME        = "devsecops-app"
         IMAGE_NAME      = "${env.APP_NAME}:${env.BUILD_NUMBER}"
         
-        // Exclusivité DefectDojo
-        DEFECTDOJO_URL  = "http://localhost:8080"
         PRODUCT_TYPE    = "Jenkins" 
-        
-        // Configuration de kubectl pour pointer sur Minikube (depuis Jenkins)
-        KUBECONFIG      = "C:\\Users\\INFO\\.kube\\config"
+        // DEFECTDOJO_URL est désormais récupéré via les variables d'env globales de Jenkins
     }
 
     stages {
@@ -125,10 +123,65 @@ pipeline {
         stage('5. Security Gate') {
             steps {
                 script {
-                    if (currentBuild.currentResult == 'FAILURE') {
-                        error('Pipeline bloquée : Des vulnérabilités de haut niveau ont été détectées au cours des scans.')
+                    echo "Vérification avancée des rapports de sécurité (Parsing JSON)..."
+                    def highCritCount = 0
+                    def secretCount = 0
+
+                    if (fileExists('trivy-report.json')) {
+                        def trivyReport = readJSON file: 'trivy-report.json'
+                        if (trivyReport.Results) {
+                            trivyReport.Results.each { result ->
+                                if (result.Vulnerabilities) {
+                                    result.Vulnerabilities.each { vuln ->
+                                        if (vuln.Severity == 'HIGH' || vuln.Severity == 'CRITICAL') {
+                                            highCritCount++
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (fileExists('trivy-secrets.json')) {
+                        def secretsReport = readJSON file: 'trivy-secrets.json'
+                        if (secretsReport.Results) {
+                            secretsReport.Results.each { result ->
+                                if (result.Secrets) {
+                                    secretCount += result.Secrets.size()
+                                }
+                            }
+                        }
+                    }
+
+                    if (highCritCount > 0 || secretCount > 0) {
+                        error("Pipeline bloquée (Security Gate) : ${highCritCount} vulnérabilités (HIGH/CRITICAL) et ${secretCount} secrets exposés trouvés dans le code/image !")
+                    } else if (currentBuild.currentResult == 'FAILURE') {
+                        error("Pipeline bloquée : Des échecs ont été détectés lors des scans IaC ou vérifications Kubernetes.")
                     } else {
-                        echo 'Pipeline OK : Aucune vulnérabilité bloquante détectée.'
+                        echo "Pipeline propre ✅ : Aucune vulnérabilité critique ou majeure détectée."
+                    }
+                }
+            }
+        }
+
+        stage('6. Déploiement Multi-Environnements') {
+            // Objectif PFE : Workflow multi-environnements (dev / staging / prod)
+            steps {
+                script {
+                    echo 'Déploiement sécurisé en cours sur les environnements cibles...'
+                    
+                    // Création (si inexistant) et déploiement dans le namespace "staging"
+                    catchError(buildResult: 'FAILURE') {
+                        bat 'kubectl create namespace staging --dry-run=client -o yaml | kubectl apply -f -'
+                        bat 'kubectl apply -f kubernetes -n staging'
+                    }
+                    
+                    // Création et déploiement dans le namespace "prod" avec validation manuelle
+                    input message: "Approuver le déploiement de l'application ${env.APP_NAME} sur l'environnement de PRODUCTION ?"
+                    
+                    catchError(buildResult: 'FAILURE') {
+                        bat 'kubectl create namespace prod --dry-run=client -o yaml | kubectl apply -f -'
+                        bat 'kubectl apply -f kubernetes -n prod'
                     }
                 }
             }
@@ -164,9 +217,25 @@ pipeline {
         }
         success {
             echo "✅ Pipeline réussie ! Code clean, aucune faille détectée."
+            
+            // Objectif PFE : Automatisation de la réponse (Notifications de succès)
+            // slackSend color: "good", message: "✅ Déploiement DevSecOps réussi : ${env.APP_NAME} propulsé sur Staging et Prod."
         }
         failure {
             echo "❌ Pipeline bloquée : Des défauts sécuritaires ont été trouvés. Vérifie les détails dans DefectDojo."
+            
+            // Objectif PFE : Réponse automatique aux incidents (Génération d'alertes en temps réel)
+            echo "📧 Déclenchement automatique des alertes sécurité..."
+            
+            // 1. Notification par Email 
+            // (Nécessite la configuration d'un serveur SMTP dans 'Jenkins > Manage > System')
+            mail to: 'security-team@example.com',
+                 subject: "🚨 ALERTE DEVSECOPS - Pipeline ${env.APP_NAME}",
+                 body: "Le déploiement a été bloqué pour cause de vulnérabilités ou de misconfigurations. Consultez DefectDojo et les logs Jenkins pour agir."
+                 
+            // 2. Notification Slack (Commenté pour ne pas casser le job s'il te manque le plugin)
+            // (Nécessite le plugin 'Slack Notification' dans Jenkins)
+            // slackSend color: "danger", message: "🚨 INCIDENT DEVSECOPS : Le déploiement de ${env.APP_NAME} a été bloqué automatiquement !"
         }
     }
 }
