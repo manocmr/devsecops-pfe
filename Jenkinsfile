@@ -209,7 +209,8 @@ pipeline {
                 withCredentials([string(credentialsId: 'defectdojo-api-token', variable: 'DD_API_TOKEN')]) {
                     reports.each { file, scan_type ->
                         if (fileExists(file)) {
-                            bat """curl.exe -s -X POST "${env.DEFECTDOJO_URL}/api/v2/reimport-scan/" -H "Authorization: Token ${env.DD_API_TOKEN}" -F "scan_type=${scan_type}" -F "file=@${file}" -F "engagement_name=main" -F "product_name=${env.APP_NAME}" -F "product_type_name=${env.PRODUCT_TYPE}" -F "auto_create_context=true" """
+                            def dojoUrl = env.DEFECTDOJO_URL ?: "http://localhost:8080"
+                            bat "curl.exe -s -X POST \"${dojoUrl}/api/v2/reimport-scan/\" -H \"Authorization: Token %DD_API_TOKEN%\" -F \"scan_type=${scan_type}\" -F \"file=@${file}\" -F \"engagement_name=main\" -F \"product_name=${env.APP_NAME}\" -F \"product_type_name=${env.PRODUCT_TYPE}\" -F \"auto_create_context=true\""
                         }
                     }
                 }
