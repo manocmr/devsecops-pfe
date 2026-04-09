@@ -229,9 +229,9 @@ pipeline {
             
             // 1. Notification par Email 
             // (Nécessite la configuration d'un serveur SMTP dans 'Jenkins > Manage > System')
-            mail to: 'security-team@example.com',
-                 subject: "🚨 ALERTE DEVSECOPS - Pipeline ${env.APP_NAME}",
-                 body: "Le déploiement a été bloqué pour cause de vulnérabilités ou de misconfigurations. Consultez DefectDojo et les logs Jenkins pour agir."
+            // mail to: 'security-team@example.com',
+            //      subject: "🚨 ALERTE DEVSECOPS - Pipeline ${env.APP_NAME}",
+            //      body: "Le déploiement a été bloqué pour cause de vulnérabilités ou de misconfigurations. Consultez DefectDojo et les logs Jenkins pour agir."
                  
             // 2. Notification Slack (Commenté pour ne pas casser le job s'il te manque le plugin)
             // (Nécessite le plugin 'Slack Notification' dans Jenkins)
