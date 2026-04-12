@@ -1,0 +1,13 @@
+# NetworkPolicy de démonstration : autorise le trafic entrant depuis le même namespace.
+# Requis si le build Jenkins utilise ENFORCE_NETPOL=true (au moins une NetworkPolicy en prod).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-within-namespace
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
