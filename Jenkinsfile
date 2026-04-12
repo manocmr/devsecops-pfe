@@ -1,3 +1,8 @@
+// Credentials Jenkins requis (IDs à aligner avec ton instance) :
+// - java-home-cred     : Secret text ou fichier selon ta config (JAVA_HOME)
+// - kubeconfig         : Secret file = fichier kubeconfig du cluster
+// - defectdojo-api-token : Secret text (API v2 DefectDojo)
+// Optionnel : vault-token (si VAULT_ADDR est défini)
 pipeline {
 
     agent any
@@ -641,48 +646,50 @@ Ce stage documente l'exigence ; la rotation réelle dépend de ton infra entrepr
 
             script {
 
-                archiveArtifacts allowEmptyArchive: true, artifacts: 'rbac-audit-*.txt,netpol-audit-all.txt'
+                // Sans node/workspace (ex. échec très tôt), archiveArtifacts et bat échouent avec MissingContextVariableException.
+                def agentName = env.NODE_NAME?.trim()
+                def wsPath = env.WORKSPACE?.trim()
+                if (!agentName || !wsPath) {
+                    echo 'Post always : NODE_NAME ou WORKSPACE absent — archive et DefectDojo ignorés (contexte agent indisponible).'
+                } else {
+                    node(agentName) {
+                        dir(wsPath) {
+                            archiveArtifacts allowEmptyArchive: true, artifacts: 'rbac-audit-*.txt,netpol-audit-all.txt'
 
-                echo 'Envoi des rapports JSON natifs à DefectDojo...'
+                            echo 'Envoi des rapports JSON natifs à DefectDojo...'
 
+                            def reports = [
 
+                                'trivy-report.json'          : 'Trivy Scan',
 
-                def reports = [
+                                'trivy-secrets.json'         : 'Trivy Scan',
 
-                    'trivy-report.json'          : 'Trivy Scan',
+                                'checkov-terraform.json'     : 'Checkov Scan',
 
-                    'trivy-secrets.json'         : 'Trivy Scan',
+                                'checkov-kubernetes.json'    : 'Checkov Scan',
 
-                    'checkov-terraform.json'     : 'Checkov Scan',
+                                'tfsec-report.json'          : 'TFSec Scan',
 
-                    'checkov-kubernetes.json'    : 'Checkov Scan',
+                                'terrascan-terraform.json'   : 'Terrascan Scan',
 
-                    'tfsec-report.json'          : 'TFSec Scan',
+                                'kube-bench.json'            : 'kube-bench Scan',
 
-                    'terrascan-terraform.json'   : 'Terrascan Scan',
+                                'kube-hunter.json'           : 'KubeHunter Scan'
 
-                    'kube-bench.json'            : 'kube-bench Scan',
+                            ]
 
-                    'kube-hunter.json'           : 'KubeHunter Scan'
-
-                ]
-
-
-
-                withCredentials([string(credentialsId: 'defectdojo-api-token', variable: 'DD_API_TOKEN')]) {
-
-                    reports.each { file, scan_type ->
-
-                        if (fileExists(file)) {
-
-                            def dojoUrl = env.DEFECTDOJO_URL ?: "http://localhost:8080"
-
-                            bat "curl.exe -s -X POST \"${dojoUrl}/api/v2/reimport-scan/\" -H \"Authorization: Token %DD_API_TOKEN%\" -F \"scan_type=${scan_type}\" -F \"file=@${file}\" -F \"engagement_name=main\" -F \"product_name=${env.APP_NAME}\" -F \"product_type_name=${env.PRODUCT_TYPE}\" -F \"auto_create_context=true\""
-
+                            catchError(buildResult: null) {
+                                withCredentials([string(credentialsId: 'defectdojo-api-token', variable: 'DD_API_TOKEN')]) {
+                                    reports.each { file, scan_type ->
+                                        if (fileExists(file)) {
+                                            def dojoUrl = env.DEFECTDOJO_URL ?: "http://localhost:8080"
+                                            bat "curl.exe -s -X POST \"${dojoUrl}/api/v2/reimport-scan/\" -H \"Authorization: Token %DD_API_TOKEN%\" -F \"scan_type=${scan_type}\" -F \"file=@${file}\" -F \"engagement_name=main\" -F \"product_name=${env.APP_NAME}\" -F \"product_type_name=${env.PRODUCT_TYPE}\" -F \"auto_create_context=true\""
+                                        }
+                                    }
+                                }
+                            }
                         }
-
                     }
-
                 }
 
             }
@@ -699,11 +706,17 @@ Ce stage documente l'exigence ; la rotation réelle dépend de ton infra entrepr
 
                     try {
 
-                        bat """
+                        def agentName = env.NODE_NAME?.trim() ?: 'built-in'
 
-                            curl.exe -s -X POST -H "Content-Type: application/json" -d "{\\"text\\":\\"DevSecOps OK : ${env.APP_NAME} build ${env.BUILD_NUMBER}\\"}" "%SLACK_WEBHOOK_URL%"
+                        node(agentName) {
 
-                        """
+                            bat """
+
+                                curl.exe -s -X POST -H "Content-Type: application/json" -d "{\\"text\\":\\"DevSecOps OK : ${env.APP_NAME} build ${env.BUILD_NUMBER}\\"}" "%SLACK_WEBHOOK_URL%"
+
+                            """
+
+                        }
 
                     } catch (Exception e) {
 
@@ -723,57 +736,61 @@ Ce stage documente l'exigence ; la rotation réelle dépend de ton infra entrepr
 
             script {
 
-                echo 'Réponse incident : rollback Deployment (dev / staging / prod) si une révision précédente existe...'
+                def agentName = env.NODE_NAME?.trim() ?: 'built-in'
 
-                catchError(buildResult: null) {
+                node(agentName) {
 
-                    bat """
-
-                        kubectl rollout undo deployment/${env.K8S_DEPLOYMENT_NAME} -n prod --ignore-not-found=true
-
-                        kubectl rollout undo deployment/${env.K8S_DEPLOYMENT_NAME} -n staging --ignore-not-found=true
-
-                        kubectl rollout undo deployment/${env.K8S_DEPLOYMENT_NAME} -n dev --ignore-not-found=true
-
-                    """
-
-                }
-
-                if (params.AGGRESSIVE_REMEDIATE) {
-
-                    catchError(buildResult: null) {
-
-                        bat "kubectl delete deployment ${env.K8S_DEPLOYMENT_NAME} -n prod --ignore-not-found=true"
-
-                    }
-
-                }
-
-
-
-                if (env.SECURITY_ALERT_EMAIL?.trim()) {
-
-                    catchError(buildResult: null) {
-
-                        mail to: env.SECURITY_ALERT_EMAIL,
-
-                             subject: "[DevSecOps] Échec pipeline ${env.APP_NAME} #${env.BUILD_NUMBER}",
-
-                             body: "Le build a échoué. Voir Jenkins et DefectDojo. Job: ${env.BUILD_URL}"
-
-                    }
-
-                }
-
-                if (env.SLACK_WEBHOOK_URL?.trim()) {
+                    echo 'Réponse incident : rollback Deployment (dev / staging / prod) si une révision précédente existe...'
 
                     catchError(buildResult: null) {
 
                         bat """
 
-                            curl.exe -s -X POST -H "Content-Type: application/json" -d "{\\"text\\":\\":warning: Échec DevSecOps ${env.APP_NAME} #${env.BUILD_NUMBER}\\"}" "%SLACK_WEBHOOK_URL%"
+                            kubectl rollout undo deployment/${env.K8S_DEPLOYMENT_NAME} -n prod --ignore-not-found=true
+
+                            kubectl rollout undo deployment/${env.K8S_DEPLOYMENT_NAME} -n staging --ignore-not-found=true
+
+                            kubectl rollout undo deployment/${env.K8S_DEPLOYMENT_NAME} -n dev --ignore-not-found=true
 
                         """
+
+                    }
+
+                    if (params.AGGRESSIVE_REMEDIATE) {
+
+                        catchError(buildResult: null) {
+
+                            bat "kubectl delete deployment ${env.K8S_DEPLOYMENT_NAME} -n prod --ignore-not-found=true"
+
+                        }
+
+                    }
+
+                    if (env.SECURITY_ALERT_EMAIL?.trim()) {
+
+                        catchError(buildResult: null) {
+
+                            mail to: env.SECURITY_ALERT_EMAIL,
+
+                                 subject: "[DevSecOps] Échec pipeline ${env.APP_NAME} #${env.BUILD_NUMBER}",
+
+                                 body: "Le build a échoué. Voir Jenkins et DefectDojo. Job: ${env.BUILD_URL}"
+
+                        }
+
+                    }
+
+                    if (env.SLACK_WEBHOOK_URL?.trim()) {
+
+                        catchError(buildResult: null) {
+
+                            bat """
+
+                                curl.exe -s -X POST -H "Content-Type: application/json" -d "{\\"text\\":\\":warning: Échec DevSecOps ${env.APP_NAME} #${env.BUILD_NUMBER}\\"}" "%SLACK_WEBHOOK_URL%"
+
+                            """
+
+                        }
 
                     }
 
