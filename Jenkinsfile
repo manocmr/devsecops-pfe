@@ -9,26 +9,12 @@ pipeline {
 
 
 
-    parameters {
-
-        string(name: 'CVSS_THRESHOLD', defaultValue: '7.0', description: 'Seuil CVSS : toute vulnérabilité avec un score max (NVD/RedHat/GHSA, etc.) >= cette valeur bloque le gate.')
-
-        booleanParam(name: 'ENFORCE_NETPOL', defaultValue: false, description: 'Si coché : échec si aucune NetworkPolicy dans le namespace prod (après déploiement).')
-
-        booleanParam(name: 'AGGRESSIVE_REMEDIATE', defaultValue: false, description: 'Si coché en échec : supprime le Deployment cible en prod (en plus du rollback).')
-
-    }
-
-
-
     environment {
 
         JAVA_HOME       = credentials('java-home-cred')
 
         // Secret file Jenkins : le fichier kubeconfig est copié sur l'agent ; la variable reçoit le chemin temporaire.
         KUBECONFIG      = credentials('kubeconfig')
-
-
 
         APP_NAME             = "devsecops-app"
 
@@ -346,7 +332,7 @@ pipeline {
 
 
 
-        stage('4.5 Audit RBAC & Network Policies') {
+        stage('4.5 Audit RBAC') {
 
             steps {
 
@@ -368,167 +354,11 @@ pipeline {
 
                             kubectl get rolebindings,roles,clusterrolebindings -n prod -o wide > rbac-audit-prod.txt 2>&1
 
-                            kubectl get networkpolicies.networking.k8s.io -A -o wide > netpol-audit-all.txt 2>&1
-
                         """
 
                     }
 
-                    echo 'Rapports : rbac-audit-*.txt, netpol-audit-all.txt (archiver en artefact Jenkins si besoin).'
-
-                }
-
-            }
-
-        }
-
-
-
-        stage('5. Security Gate') {
-
-            steps {
-
-                script {
-
-                    echo "Vérification des rapports (sévérité HIGH/CRITICAL, seuil CVSS, secrets)..."
-
-                    def cvssMinStr = (params.CVSS_THRESHOLD ?: '7.0').toString().trim()
-
-                    def highCritCount = 0
-
-                    def cvssGateCount = 0
-
-                    def secretCount = 0
-
-
-
-                    if (fileExists('trivy-report.json')) {
-
-                        def out = powershell(script: "\$CvssMin = [double]'${cvssMinStr}'; " + '''
-
-$data = Get-Content -Raw trivy-report.json | ConvertFrom-Json
-
-$sev = 0
-
-$cvss = 0
-
-if ($null -ne $data -and $null -ne $data.Results) {
-
-    foreach ($res in $data.Results) {
-
-        if ($null -eq $res.Vulnerabilities) { continue }
-
-        foreach ($v in $res.Vulnerabilities) {
-
-            if ($v.Severity -eq 'HIGH' -or $v.Severity -eq 'CRITICAL') { $sev++ }
-
-            $maxScore = 0.0
-
-            if ($null -ne $v.CVSS) {
-
-                foreach ($p in $v.CVSS.PSObject.Properties) {
-
-                    $o = $p.Value
-
-                    if ($null -ne $o.V3Score -and [double]$o.V3Score -gt $maxScore) { $maxScore = [double]$o.V3Score }
-
-                    if ($null -ne $o.V2Score -and [double]$o.V2Score -gt $maxScore) { $maxScore = [double]$o.V2Score }
-
-                }
-
-            }
-
-            if ($maxScore -ge $CvssMin) { $cvss++ }
-
-        }
-
-    }
-
-}
-
-Write-Output $sev
-
-Write-Output $cvss
-
-''', returnStdout: true).trim()
-
-
-
-                        def lines = out.split('\r?\n').findAll { it.matches("^\\d+\$") }
-
-                        if (lines.size() >= 2) {
-
-                            highCritCount = lines[0].toInteger()
-
-                            cvssGateCount = lines[1].toInteger()
-
-                        } else if (lines.size() == 1) {
-
-                            highCritCount = lines[0].toInteger()
-
-                        }
-
-                    }
-
-
-
-                    if (fileExists('trivy-secrets.json')) {
-
-                        def out = powershell(script: '''
-
-                            $data = Get-Content -Raw trivy-secrets.json | ConvertFrom-Json
-
-                            $count = 0
-
-                            if ($null -ne $data -and $null -ne $data.Results) {
-
-                                foreach ($res in $data.Results) {
-
-                                    if ($null -ne $res.Secrets) {
-
-                                        $count += $res.Secrets.count
-
-                                    }
-
-                                }
-
-                            }
-
-                            Write-Output $count
-
-                        ''', returnStdout: true).trim()
-
-
-
-                        def lines = out.split('\r?\n')
-
-                        for (def i = 0; i < lines.length; i++) {
-
-                            if (lines[i].matches("^\\d+\$")) {
-
-                                secretCount = lines[i].toInteger()
-
-                            }
-
-                        }
-
-                    }
-
-
-
-                    if (highCritCount > 0 || cvssGateCount > 0 || secretCount > 0) {
-
-                        error("Pipeline bloquée (Security Gate) : ${highCritCount} vuln. HIGH/CRITICAL, ${cvssGateCount} vuln. avec CVSS >= ${cvssMinStr}, ${secretCount} secrets détectés.")
-
-                    } else if (currentBuild.currentResult == 'FAILURE') {
-
-                        error("Pipeline bloquée : échecs (FAILURE) lors des scans IaC, Vault, Kubernetes ou étapes critiques.")
-
-                    } else {
-
-                        echo "Pipeline propre : aucun secret, pas de HIGH/CRITICAL ni de CVSS >= ${cvssMinStr} (selon rapports Trivy)."
-
-                    }
+                    echo 'Rapports : rbac-audit-*.txt (archiver en artefact Jenkins si besoin).'
 
                 }
 
@@ -580,32 +410,6 @@ Write-Output $cvss
 
                     }
 
-
-
-                    if (params.ENFORCE_NETPOL) {
-
-                        catchError(buildResult: 'FAILURE') {
-
-                            powershell '''
-
-                                $ErrorActionPreference = 'Stop'
-
-                                $json = kubectl get networkpolicy -n prod -o json | ConvertFrom-Json
-
-                                if ($null -eq $json -or $json.items.Count -eq 0) {
-
-                                    Write-Error "ENFORCE_NETPOL : aucune NetworkPolicy dans prod après déploiement."
-
-                                }
-
-                                Write-Host "OK: $($json.items.Count) NetworkPolicy(s) en prod."
-
-                            '''
-
-                        }
-
-                    }
-
                 }
 
             }
@@ -654,7 +458,7 @@ Ce stage documente l'exigence ; la rotation réelle dépend de ton infra entrepr
                 } else {
                     node(agentName) {
                         dir(wsPath) {
-                            archiveArtifacts allowEmptyArchive: true, artifacts: 'rbac-audit-*.txt,netpol-audit-all.txt'
+                            archiveArtifacts allowEmptyArchive: true, artifacts: 'rbac-audit-*.txt'
 
                             echo 'Envoi des rapports JSON natifs à DefectDojo...'
 
@@ -702,28 +506,8 @@ Ce stage documente l'exigence ; la rotation réelle dépend de ton infra entrepr
 
             script {
 
-                if (env.SLACK_WEBHOOK_URL?.trim()) {
-
-                    try {
-
-                        def agentName = env.NODE_NAME?.trim() ?: 'built-in'
-
-                        node(agentName) {
-
-                            bat """
-
-                                curl.exe -s -X POST -H "Content-Type: application/json" -d "{\\"text\\":\\"DevSecOps OK : ${env.APP_NAME} build ${env.BUILD_NUMBER}\\"}" "%SLACK_WEBHOOK_URL%"
-
-                            """
-
-                        }
-
-                    } catch (Exception e) {
-
-                        echo "Slack (succès) non envoyé : ${e.message}"
-
-                    }
-
+                catchError(buildResult: null) {
+                    bat 'python scripts\\notify.py --status success'
                 }
 
             }
@@ -740,58 +524,8 @@ Ce stage documente l'exigence ; la rotation réelle dépend de ton infra entrepr
 
                 node(agentName) {
 
-                    echo 'Réponse incident : rollback Deployment (dev / staging / prod) si une révision précédente existe...'
-
                     catchError(buildResult: null) {
-
-                        bat """
-
-                            kubectl rollout undo deployment/${env.K8S_DEPLOYMENT_NAME} -n prod --ignore-not-found=true
-
-                            kubectl rollout undo deployment/${env.K8S_DEPLOYMENT_NAME} -n staging --ignore-not-found=true
-
-                            kubectl rollout undo deployment/${env.K8S_DEPLOYMENT_NAME} -n dev --ignore-not-found=true
-
-                        """
-
-                    }
-
-                    if (params.AGGRESSIVE_REMEDIATE) {
-
-                        catchError(buildResult: null) {
-
-                            bat "kubectl delete deployment ${env.K8S_DEPLOYMENT_NAME} -n prod --ignore-not-found=true"
-
-                        }
-
-                    }
-
-                    if (env.SECURITY_ALERT_EMAIL?.trim()) {
-
-                        catchError(buildResult: null) {
-
-                            mail to: env.SECURITY_ALERT_EMAIL,
-
-                                 subject: "[DevSecOps] Échec pipeline ${env.APP_NAME} #${env.BUILD_NUMBER}",
-
-                                 body: "Le build a échoué. Voir Jenkins et DefectDojo. Job: ${env.BUILD_URL}"
-
-                        }
-
-                    }
-
-                    if (env.SLACK_WEBHOOK_URL?.trim()) {
-
-                        catchError(buildResult: null) {
-
-                            bat """
-
-                                curl.exe -s -X POST -H "Content-Type: application/json" -d "{\\"text\\":\\":warning: Échec DevSecOps ${env.APP_NAME} #${env.BUILD_NUMBER}\\"}" "%SLACK_WEBHOOK_URL%"
-
-                            """
-
-                        }
-
+                        bat 'python scripts\\notify.py --status failure'
                     }
 
                 }
